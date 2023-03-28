@@ -14,4 +14,4 @@ RUN go build -o app .
 EXPOSE 8002
 
 # Run the command to start the API server when the container starts
-CMD ["/bin/sh", "./app"]
+CMD ["/bin/sh", "./run.sh"]

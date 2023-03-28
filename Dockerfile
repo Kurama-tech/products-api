@@ -7,7 +7,6 @@ WORKDIR /go/src/app
 # Copy the code into the container
 COPY . .
 
-RUN run.sh
 # Build the Go application
 RUN go build -o app .
 
@@ -15,4 +14,4 @@ RUN go build -o app .
 EXPOSE 8002
 
 # Run the command to start the API server when the container starts
-CMD ["./app"]
+CMD ["/run.sh"]

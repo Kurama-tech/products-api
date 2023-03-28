@@ -7,7 +7,7 @@ WORKDIR /go/src/app
 # Copy the code into the container
 COPY . .
 
-RUN ./run.sh
+RUN run.sh
 # Build the Go application
 RUN go build -o app .
 

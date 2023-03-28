@@ -7,5 +7,3 @@ IFS=$'\n' read -d '' -r -a envVars < .env
 for var in "${envVars[@]}"; do
   export "$var"
 done
-
-./app

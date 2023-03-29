@@ -18,6 +18,20 @@ import (
 type Item struct {
 	Name  string `json:"name"`
 	Price int    `json:"price"`
+	Description string `json:"description"`
+	TableAttached []string `json:"tables"`
+
+}
+
+type TableData struct {
+	Name string `json:"name"`
+}
+
+type Table struct{
+	Name string `json:"name"`
+	Description string `json:"description"`
+	TableHeadings []TableData `json:"tableheading"`
+	TableData []TableData `json:"tabledata"`
 }
 
 const Database = "jwc"
@@ -129,21 +143,34 @@ func editItem(client *mongo.Client) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
+		tables := item.TableAttached
 		
 		// Update the item in the "items" collection in MongoDB
 		collection := client.Database(Database).Collection("products")
 		filter := bson.M{"name": name}
-		update := bson.M{"$set": bson.M{"price": item.Price}}
+		update := bson.M{"$set": bson.M{"price": item.Price, "name": item.Name, "description":item.Description }}
 		_, err = collection.UpdateOne(context.Background(), filter, update)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		for i:=0; i<len(tables);i++{
+			filter := bson.M{"name": item.Name}
+			update:= bson.M{"$addToSet": bson.M{"tables": tables[i]}}
+			_, err = collection.UpdateOne(context.Background(), filter, update)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 		}
 		
 		// Send a success response
 		w.WriteHeader(http.StatusOK)
 	}
 }
+
+func appendTablesAttached(client *mongo.Client, tables []string, )
 
 // getItems retrieves all items from the "items" collection in MongoDB
 func getItems(client *mongo.Client) http.HandlerFunc {

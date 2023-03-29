@@ -170,8 +170,6 @@ func editItem(client *mongo.Client) http.HandlerFunc {
 	}
 }
 
-func appendTablesAttached(client *mongo.Client, tables []string, )
-
 // getItems retrieves all items from the "items" collection in MongoDB
 func getItems(client *mongo.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

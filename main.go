@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
+	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -23,6 +26,19 @@ type Item struct {
 
 }
 
+
+
+type Credentials struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type Claims struct {
+	Username string `json:"username"`
+	jwt.StandardClaims
+}
+
+
 type TableData struct {
 	Name string `json:"name"`
 }
@@ -36,19 +52,42 @@ type Table struct{
 
 const Database = "jwc"
 
+func getEnv(Environment string) (string, error) {
+	variable := os.Getenv(Environment)
+	if variable == "" {
+		fmt.Println(Environment + ` Environment variable is not set`)
+		return "", errors.New("env Not Set Properly")
+	} else {
+		fmt.Printf(Environment + " variable value is: %s\n", variable)
+		return variable, nil
+	}
+}
 func main() {
 	// MongoDB client options
 
 	// Get the value of the "ENV_VAR_NAME" environment variable
-	mongoURL := os.Getenv("MONGO_URL")
-	
-	// Check if the environment variable is set
-	if mongoURL == "" {
-		fmt.Println("MongoDB Environment variable is not set")
+	mongoURL, err := getEnv("MONGO_URL")
+	if err != nil {
 		os.Exit(1)
-	} else {
-		fmt.Printf("MongoDB Environment variable value is: %s\n", mongoURL)
 	}
+	
+	username, err := getEnv("JWT_USER")
+	if err != nil {
+		os.Exit(1)
+	}
+	password, err := getEnv("JWT_PASSWORD")
+	if err != nil {
+		os.Exit(1)
+	}
+
+	jwtk, err := getEnv("JWT_KEY")
+	if err != nil {
+		os.Exit(1)
+	}
+
+
+	var jwtKey = []byte(jwtk)
+	
 	clientOptions := options.Client().ApplyURI(mongoURL)
 	
 	// Create a new MongoDB client
@@ -76,6 +115,8 @@ func main() {
 	
 	// Define a PUT route to edit an item in a collection
 	router.HandleFunc("/items/{name}", editItem(client)).Methods("PUT")
+
+	router.HandleFunc("/login", login(jwtKey, username, password)).Methods("POST")
 	
 	// Start the HTTP server
 	log.Println("Starting HTTP server...")
@@ -84,6 +125,50 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
+func login(jwtKey []byte, username string, password string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+	var creds Credentials
+
+	err := json.NewDecoder(r.Body).Decode(&creds)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	// Here, you should check the credentials against your database or other authentication system
+	// For simplicity, we'll just hardcode a username and password
+	if creds.Username != username || creds.Password != password {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	expirationTime := time.Now().Add(24 * time.Hour)
+	claims := &Claims{
+		Username: creds.Username,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expirationTime.Unix(),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(jwtKey)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:    "jwt",
+		Value:   tokenString,
+		Expires: expirationTime,
+	})
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "Login Successful")
+}
+}
+
 
 // addItem inserts a new item into the "items" collection in MongoDB
 func addItem(client *mongo.Client) http.HandlerFunc {

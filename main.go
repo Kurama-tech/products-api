@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
+	"github.com/rs/cors"
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -64,6 +65,16 @@ func getEnv(Environment string) (string, error) {
 }
 func main() {
 	// MongoDB client options
+	
+	c := cors.New(cors.Options{
+		AllowedOrigins: []string{"http://localhost:3000"}, // All origins
+		AllowedMethods: []string{"POST", "GET"}, // Allowing only get, just an example
+		AllowedHeaders: []string{"Set-Cookie", "Content-Type"},
+		ExposedHeaders: []string{"Set-Cookie"},
+		AllowCredentials: true,
+		Debug: true,
+	})
+	
 
 	// Get the value of the "ENV_VAR_NAME" environment variable
 	mongoURL, err := getEnv("MONGO_URL")
@@ -104,6 +115,7 @@ func main() {
 	
 	// Create a new router using Gorilla Mux
 	router := mux.NewRouter()
+
 	
 	// Define a POST route to add an item to a collection
 	router.HandleFunc("/items", addItem(client)).Methods("POST")
@@ -120,7 +132,7 @@ func main() {
 	
 	// Start the HTTP server
 	log.Println("Starting HTTP server...")
-	err = http.ListenAndServe(":8002", router)
+	err = http.ListenAndServe(":8002", c.Handler(router))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -128,6 +140,8 @@ func main() {
 
 func login(jwtKey []byte, username string, password string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
 	var creds Credentials
 
 	err := json.NewDecoder(r.Body).Decode(&creds)
@@ -157,14 +171,17 @@ func login(jwtKey []byte, username string, password string) http.HandlerFunc {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	fmt.Println(tokenString)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:    "jwt",
 		Value:   tokenString,
-		Expires: expirationTime,
-	})
+		SameSite: http.SameSiteNoneMode,
+		Secure: true,
+		Expires: expirationTime,})
 
-	w.WriteHeader(http.StatusOK)
+	fmt.Println(w)
+	w.WriteHeader(http.StatusOK) 
 	fmt.Fprintln(w, "Login Successful")
 }
 }

@@ -8,24 +8,38 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
-	"github.com/rs/cors"
 	"github.com/gorilla/mux"
+	"github.com/minio/minio-go"
+	"github.com/rs/cors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type Item struct {
+type ItemGet struct {
+	ID    primitive.ObjectID `bson:"_id" json:"id,omitempty"`
 	Name  string `json:"name"`
-	Price int    `json:"price"`
 	Description string `json:"description"`
-	TableAttached []string `json:"tables"`
+	Images []string `bson:"images" json:"images"`
+	Status string `json:"status"`
+	TableAttached []string `bson:"tables" json:"tables"`
 
 }
+type Item struct {
+	Name  string `json:"name"`
+	Description string `json:"description"`
+	Images []string `bson:"images" json:"images"`
+	Status string `json:"status"`
+	TableAttached []string `bson:"tables" json:"tables"`
+
+}
+
+
 
 
 
@@ -52,6 +66,7 @@ type Table struct{
 }
 
 const Database = "jwc"
+const minioURL = "167.71.233.124:9000"
 
 func getEnv(Environment string) (string, error) {
 	variable := os.Getenv(Environment)
@@ -68,7 +83,7 @@ func main() {
 	
 	c := cors.New(cors.Options{
 		AllowedOrigins: []string{"http://localhost:3000"}, // All origins
-		AllowedMethods: []string{"POST", "GET"}, // Allowing only get, just an example
+		AllowedMethods: []string{"POST", "GET", "PUT", "DELETE"}, // Allowing only get, just an example
 		AllowedHeaders: []string{"Set-Cookie", "Content-Type"},
 		ExposedHeaders: []string{"Set-Cookie"},
 		AllowCredentials: true,
@@ -96,6 +111,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	minioKey, err:= getEnv("MINIO_KEY")
+	if err != nil {
+		os.Exit(1)
+	}
+	minioSecret, err:= getEnv("MINIO_SECRET")
+	if err != nil {
+		os.Exit(1)
+	}
+
 
 	var jwtKey = []byte(jwtk)
 	
@@ -112,6 +136,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	minioClient, err := minio.New(minioURL, minioKey, minioSecret, false)
+    if err != nil {
+        log.Fatalln(err)
+    }
 	
 	// Create a new router using Gorilla Mux
 	router := mux.NewRouter()
@@ -121,19 +150,32 @@ func main() {
 	router.HandleFunc("/items", addItem(client)).Methods("POST")
 
 	router.HandleFunc("/items", getItems(client)).Methods("GET")
+
+	router.HandleFunc("/items/disabled", getDisabledItems(client)).Methods("GET")
+
+	router.HandleFunc("/items/{id}", getItem(client)).Methods("GET")
 	
 	// Define a DELETE route to delete an item from a collection
-	router.HandleFunc("/items/{name}", deleteItem(client)).Methods("DELETE")
+	router.HandleFunc("/items/{id}", deleteItem(client)).Methods("DELETE")
+
+	router.HandleFunc("/items/disabled/{id}", disableItem(client)).Methods("DELETE")
+
+	router.HandleFunc("/items/enabled/{id}", enableItem(client)).Methods("GET")
+
+	router.HandleFunc("/upload", Upload(minioClient)).Methods("POST")
 	
 	// Define a PUT route to edit an item in a collection
-	router.HandleFunc("/items/{name}", editItem(client)).Methods("PUT")
+	router.HandleFunc("/items/{id}", editItem(client)).Methods("PUT")
 
 	router.HandleFunc("/login", login(jwtKey, username, password)).Methods("POST")
+
+
 	
 	// Start the HTTP server
 	log.Println("Starting HTTP server...")
 	err = http.ListenAndServe(":8002", c.Handler(router))
 	if err != nil {
+		
 		log.Fatal(err)
 	}
 }
@@ -186,6 +228,68 @@ func login(jwtKey []byte, username string, password string) http.HandlerFunc {
 }
 }
 
+func Upload(minioClient *minio.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+        // Parse the multipart form.
+        err := r.ParseMultipartForm(32 << 20)
+        if err != nil {
+			fmt.Println(err.Error())
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+
+        // Get the file headers from the form.
+        files := r.MultipartForm.File["files"]
+
+		var ImagePaths []string 
+
+        // Loop through the files and upload them to Minio.
+        for _, fileHeader := range files {
+            // Open the file.
+            file, err := fileHeader.Open()
+            if err != nil {
+				fmt.Println(err.Error())
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+            }
+            defer file.Close()
+
+            // Get the file name and extension.
+            filename := fileHeader.Filename
+            extension := filepath.Ext(filename)
+
+            // Generate a unique file name with the original extension.
+            newFilename := fmt.Sprintf("%d%s", time.Now().UnixNano(), extension)
+			newPath := "http://"+minioURL + "/jwc/" + newFilename
+			ImagePaths = append(ImagePaths, newPath)
+
+            // Upload the file to Minio.
+            _, err = minioClient.PutObject("jwc", newFilename, file, fileHeader.Size, minio.PutObjectOptions{
+				ContentType: "image/png",
+			})
+            if err != nil {
+				fmt.Println(err.Error())
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+            }
+        }
+
+		data, err := json.Marshal(ImagePaths)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Set the Content-Type header to application/json
+		//w.Header().Set("Content-Type", "application/json")
+		// Write the JSON data to the response
+		
+        // Send a success response.
+        w.WriteHeader(http.StatusOK)
+		w.Write(data)
+    }
+}
+
 
 // addItem inserts a new item into the "items" collection in MongoDB
 func addItem(client *mongo.Client) http.HandlerFunc {
@@ -216,11 +320,16 @@ func deleteItem(client *mongo.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Get the name parameter from the request URL
 		vars := mux.Vars(r)
-		name := vars["name"]
+		id := vars["id"]
 		
 		// Delete the item from the "items" collection in MongoDB
 		collection := client.Database(Database).Collection("products")
-		_, err := collection.DeleteOne(context.Background(), bson.M{"name": name})
+		oid, err := primitive.ObjectIDFromHex(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_, err = collection.DeleteOne(context.Background(), bson.M{"_id": oid})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -236,35 +345,92 @@ func editItem(client *mongo.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Get the name parameter from the request URL
 		vars := mux.Vars(r)
-		name := vars["name"]
+		id := vars["id"]
+
+		fmt.Println(id)
+
+		
 		
 		// Parse the request body into an Item struct
-		var item Item
+		var item ItemGet
 		err := json.NewDecoder(r.Body).Decode(&item)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		tables := item.TableAttached
+		fmt.Println(item)
+
+		// tables := item.TableAttached
 		
 		// Update the item in the "items" collection in MongoDB
 		collection := client.Database(Database).Collection("products")
-		filter := bson.M{"name": name}
-		update := bson.M{"$set": bson.M{"price": item.Price, "name": item.Name, "description":item.Description }}
+		filter := bson.M{"_id": item.ID}
+		update := bson.M{"$set": bson.M{"name": item.Name, "description":item.Description, "tables": item.TableAttached, "status": item.Status, "images": item.Images }}
 		_, err = collection.UpdateOne(context.Background(), filter, update)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		for i:=0; i<len(tables);i++{
-			filter := bson.M{"name": item.Name}
-			update:= bson.M{"$addToSet": bson.M{"tables": tables[i]}}
-			_, err = collection.UpdateOne(context.Background(), filter, update)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
+		
+		// Send a success response
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func disableItem(client *mongo.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Get the name parameter from the request URL
+		vars := mux.Vars(r)
+		id := vars["id"]
+
+		fmt.Println(id)
+
+		oid, err := primitive.ObjectIDFromHex(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		
+		
+		// Update the item in the "items" collection in MongoDB
+		collection := client.Database(Database).Collection("products")
+		filter := bson.M{"_id": oid}
+		update := bson.M{"$set": bson.M{"status": "disabled"}}
+		_, err = collection.UpdateOne(context.Background(), filter, update)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		
+		// Send a success response
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func enableItem(client *mongo.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Get the name parameter from the request URL
+		vars := mux.Vars(r)
+		id := vars["id"]
+
+		fmt.Println(id)
+
+		oid, err := primitive.ObjectIDFromHex(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		
+		
+		// Update the item in the "items" collection in MongoDB
+		collection := client.Database(Database).Collection("products")
+		filter := bson.M{"_id": oid}
+		update := bson.M{"$set": bson.M{"status": "active"}}
+		_, err = collection.UpdateOne(context.Background(), filter, update)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		
 		// Send a success response
@@ -285,9 +451,88 @@ func getItems(client *mongo.Client) http.HandlerFunc {
 		defer cursor.Close(context.Background())
 		
 		// Decode the cursor results into a slice of Item structs
-		var items []Item
+		var items []ItemGet
 		for cursor.Next(context.Background()) {
-			var item Item
+			var item ItemGet
+			err := cursor.Decode(&item)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			items = append(items, item)
+		}
+		
+		// Send the list of items as a JSON response
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(items)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+// getItems retrieves all items from the "items" collection in MongoDB
+func getDisabledItems(client *mongo.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Get all items from the "items" collection in MongoDB
+		collection := client.Database(Database).Collection("products")
+		cursor, err := collection.Find(context.Background(), bson.M{"status": "disabled"})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer cursor.Close(context.Background())
+		
+		// Decode the cursor results into a slice of Item structs
+		var items []ItemGet
+		for cursor.Next(context.Background()) {
+			var item ItemGet
+			err := cursor.Decode(&item)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			items = append(items, item)
+		}
+		
+		// Send the list of items as a JSON response
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(items)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
+// getItems retrieves all items from the "items" collection in MongoDB
+func getItem(client *mongo.Client) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		vars := mux.Vars(r)
+		id := vars["id"]
+
+		fmt.Println(id)
+		// Get all items from the "items" collection in MongoDB
+		collection := client.Database(Database).Collection("products")
+		oid, err := primitive.ObjectIDFromHex(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		cursor, err := collection.Find(context.Background(), bson.M{"_id": oid})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer cursor.Close(context.Background())
+		
+		
+		// Decode the cursor results into a slice of Item structs
+		var items []ItemGet
+		for cursor.Next(context.Background()) {
+			var item ItemGet
 			err := cursor.Decode(&item)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)

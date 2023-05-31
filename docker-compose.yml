@@ -1,8 +1,20 @@
 version: "3.9"
-
 services:
-  app:
+  jwcapi:
     build: .
     restart: always
+    labels:
+      - traefik.backend=jwcapi
+      - traefik.frontend.rule=Host:jwc-api.mamun.cloud
+      - traefik.docker.network=web
+      - traefik.port=8002
+    networks:
+      - internal
+      - web
     ports:
       - "8002:8002"
+networks:
+  web:
+    external: true
+  internal:
+    external: false

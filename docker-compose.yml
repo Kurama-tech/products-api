@@ -4,10 +4,7 @@ services:
     build: .
     restart: always
     labels:
-      - traefik.backend=jwcapi
       - traefik.frontend.rule=Host:jwc-api.mamun.cloud
-      - traefik.docker.network=web
-      - traefik.port=8002
     networks:
       - internal
       - web

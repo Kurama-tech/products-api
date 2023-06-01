@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
 	//"io/ioutil"
 	"log"
 	"net/http"
@@ -27,18 +28,18 @@ type ItemGet struct {
 	Name          string             `json:"name"`
 	Description   string             `json:"description"`
 	Images        []string           `bson:"images" json:"images"`
-	Type 		  string   			 `json:"type"`
-	Parent		  string   			 `json:"parent"`
+	Type          string             `json:"type"`
+	Parent        string             `json:"parent"`
 	Status        string             `json:"status"`
 	TableAttached []TableAttachType  `bson:"tables" json:"tables"`
 }
 type Item struct {
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	Images        []string `bson:"images" json:"images"`
-	Type 		  string   `json:"type"`
-	Parent		  string   `json:"parent"`
-	Status        string   `json:"status"`
+	Name          string            `json:"name"`
+	Description   string            `json:"description"`
+	Images        []string          `bson:"images" json:"images"`
+	Type          string            `json:"type"`
+	Parent        string            `json:"parent"`
+	Status        string            `json:"status"`
 	TableAttached []TableAttachType `bson:"tables" json:"tables"`
 }
 
@@ -47,10 +48,9 @@ type NavbarType struct {
 	Href string `json:"href"`
 }
 
-
 type TableAttachType struct {
 	ID   primitive.ObjectID `bson:"_id" json:"id,omitempty"`
-	Name string `json:"name"`
+	Name string             `json:"name"`
 }
 
 type Tables struct {
@@ -59,13 +59,13 @@ type Tables struct {
 }
 
 type HomeCarousel struct {
-	Name string            `json:"name"`
-	URL string `json:"url"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 type HomeCarouselGet struct {
 	ID   primitive.ObjectID `bson:"_id" json:"id,omitempty"`
-	Name string            `json:"name"`
-	URL string `json:"url"`
+	Name string             `json:"name"`
+	URL  string             `json:"url"`
 }
 
 type TablesGet struct {
@@ -96,7 +96,8 @@ type Table struct {
 }
 
 const Database = "jwc"
-const minioURL = "167.71.233.124:9000"
+
+//const minioURL = "minio.mamun.cloud:9000"
 
 func getEnv(Environment string) (string, error) {
 	variable := os.Getenv(Environment)
@@ -112,7 +113,7 @@ func main() {
 	// MongoDB client options
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"},        // All origins
+		AllowedOrigins:   []string{"*"},                            // All origins
 		AllowedMethods:   []string{"POST", "GET", "PUT", "DELETE"}, // Allowing only get, just an example
 		AllowedHeaders:   []string{"Set-Cookie", "Content-Type"},
 		ExposedHeaders:   []string{"Set-Cookie"},
@@ -149,6 +150,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	minioURL, err := getEnv("MINIO_URL")
+	if err != nil {
+		os.Exit(1)
+	}
+
 	var jwtKey = []byte(jwtk)
 
 	clientOptions := options.Client().ApplyURI(mongoURL)
@@ -165,7 +171,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	minioClient, err := minio.New(minioURL, minioKey, minioSecret, false)
+	minioClient, err := minio.New(minioURL, minioKey, minioSecret, true)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -189,7 +195,7 @@ func main() {
 
 	router.HandleFunc("/items/enabled/{id}", enableItem(client)).Methods("GET")
 
-	router.HandleFunc("/upload", Upload(minioClient)).Methods("POST")
+	router.HandleFunc("/upload", Upload(minioClient, minioURL)).Methods("POST")
 
 	// Define a PUT route to edit an item in a collection
 	router.HandleFunc("/items/{id}", editItem(client)).Methods("PUT")
@@ -202,7 +208,6 @@ func main() {
 	router.HandleFunc("/tables/{id}", getTable(client)).Methods("GET")
 	router.HandleFunc("/tables", getTables(client)).Methods("GET")
 	router.HandleFunc("/tables/{id}", deleteTable(client)).Methods("DELETE")
-
 
 	router.HandleFunc("/login", login(jwtKey, username, password)).Methods("POST")
 
@@ -263,7 +268,7 @@ func login(jwtKey []byte, username string, password string) http.HandlerFunc {
 	}
 }
 
-func Upload(minioClient *minio.Client) http.HandlerFunc {
+func Upload(minioClient *minio.Client, minioURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Parse the multipart form.
 		err := r.ParseMultipartForm(32 << 20)
@@ -275,7 +280,6 @@ func Upload(minioClient *minio.Client) http.HandlerFunc {
 
 		// Get the file headers from the form.
 		files := r.MultipartForm.File["files"]
-
 
 		var ImagePaths []string
 
@@ -298,14 +302,14 @@ func Upload(minioClient *minio.Client) http.HandlerFunc {
 
 			// Generate a unique file name with the original extension.
 			newFilename := fmt.Sprintf("%d%s", time.Now().UnixNano(), extension)
-			newPath := "http://" + minioURL + "/jwc/" + newFilename
+			newPath := "https://" + minioURL + "/jwc/" + newFilename
 			ImagePaths = append(ImagePaths, newPath)
 
 			log.Println(ImagePaths)
 
 			// Upload the file to Minio.
 			_, err = minioClient.PutObject("jwc", newFilename, file, fileHeader.Size, minio.PutObjectOptions{
-				ContentType: "image/"+dotRemoved,
+				ContentType: "image/" + dotRemoved,
 			})
 			if err != nil {
 				fmt.Println(err.Error())
@@ -600,7 +604,6 @@ func getNavBar(client *mongo.Client) http.HandlerFunc {
 			Navitems = append(Navitems, navi)
 		}
 
-
 		// Send the list of items as a JSON response
 		w.Header().Set("Content-Type", "application/json")
 		err = json.NewEncoder(w).Encode(Navitems)
@@ -727,6 +730,7 @@ func getHomeItems(client *mongo.Client) http.HandlerFunc {
 		}
 	}
 }
+
 // getTable
 func getTable(client *mongo.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

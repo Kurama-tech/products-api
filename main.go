@@ -113,7 +113,7 @@ func main() {
 	// MongoDB client options
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"https://jwc-backend.mamun.cloud", "https://jwc-frontend.mamun.cloud"},                            // All origins
+		AllowedOrigins:   []string{"https://jwc-backend.mamun.cloud", "https://jwc-frontend.mamun.cloud", "http://192.168.0.203:8001", "http://localhost:8001", "*"},                            // All origins
 		AllowedMethods:   []string{"POST", "GET", "PUT", "DELETE"}, // Allowing only get, just an example
 		AllowedHeaders:   []string{"Set-Cookie", "Content-Type"},
 		ExposedHeaders:   []string{"Set-Cookie"},

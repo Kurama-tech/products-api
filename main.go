@@ -435,7 +435,7 @@ func editItem(client *mongo.Client) http.HandlerFunc {
 		// Update the item in the "items" collection in MongoDB
 		collection := client.Database(Database).Collection("products")
 		filter := bson.M{"_id": item.ID}
-		update := bson.M{"$set": bson.M{"name": item.Name, "description": item.Description, "tables": item.TableAttached, "status": item.Status, "images": item.Images}}
+		update := bson.M{"$set": bson.M{"name": item.Name, "description": item.Description, "tables": item.TableAttached, "status": item.Status, "images": item.Images, "type": item.Type, "parent": item.Parent}}
 		_, err = collection.UpdateOne(context.Background(), filter, update)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

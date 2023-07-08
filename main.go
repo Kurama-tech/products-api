@@ -510,7 +510,8 @@ func getItems(client *mongo.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Get all items from the "items" collection in MongoDB
 		collection := client.Database(Database).Collection("products")
-		cursor, err := collection.Find(context.Background(), bson.M{})
+		findOptions := options.Find().SetSort(bson.D{{Key: "name", Value: 1}}) 
+		cursor, err := collection.Find(context.Background(), bson.M{}, findOptions)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

@@ -4,7 +4,6 @@ services:
     build: .
     restart: always
     labels:
-      - traefik.frontend.rule=Host:jwc-api.mamun.cloud
       - traefik.frontend.rule=Host:api.jwcindia.com
     networks:
       - internal

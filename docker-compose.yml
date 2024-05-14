@@ -4,7 +4,7 @@ services:
     build: .
     restart: always
     labels:
-      - traefik.http.routers.admin.rule=Host(`api.jwcindia.com`)
+      - traefik.http.routers.admin.rule=Host(`jwcapi.mamun.app`)
       - traefik.http.routers.admin.tls=true
       - traefik.http.routers.admin.tls.certresolver=lets-encrypt
       - traefik.port=8002

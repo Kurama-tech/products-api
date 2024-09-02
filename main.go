@@ -15,7 +15,8 @@ import (
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
-	"github.com/minio/minio-go"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/rs/cors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -150,10 +151,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	minioURL, err := getEnv("MINIO_URL")
-	if err != nil {
-		os.Exit(1)
-	}
+	// minioURL, err := getEnv("MINIO_URL")
+	// if err != nil {
+	// 	os.Exit(1)
+	// }
 
 	var jwtKey = []byte(jwtk)
 
@@ -171,7 +172,10 @@ func main() {
 		log.Fatal(err)
 	}
 
-	minioClient, err := minio.New(minioURL, minioKey, minioSecret, true)
+	minioClient, err := minio.New("s3.amazonaws.com", &minio.Options{
+		Creds: credentials.NewStaticV4(minioKey, minioSecret, ""),
+		Secure: true,
+	})
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -195,7 +199,7 @@ func main() {
 
 	router.HandleFunc("/items/enabled/{id}", enableItem(client)).Methods("GET")
 
-	router.HandleFunc("/upload", Upload(minioClient, minioURL)).Methods("POST")
+	router.HandleFunc("/upload", Upload(minioClient,"jwc", "s3.amazonaws.com")).Methods("POST")
 
 	// Define a PUT route to edit an item in a collection
 	router.HandleFunc("/items/{id}", editItem(client)).Methods("PUT")
@@ -268,70 +272,71 @@ func login(jwtKey []byte, username string, password string) http.HandlerFunc {
 	}
 }
 
-func Upload(minioClient *minio.Client, minioURL string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Parse the multipart form.
-		err := r.ParseMultipartForm(32 << 20)
-		if err != nil {
-			fmt.Println(err.Error())
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+func Upload(minioClient *minio.Client, bucketName, s3URL string) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        // Parse the multipart form.
+        err := r.ParseMultipartForm(32 << 20)
+        if err != nil {
+            fmt.Println(err.Error())
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
 
-		// Get the file headers from the form.
-		files := r.MultipartForm.File["files"]
+        // Get the file headers from the form.
+        files := r.MultipartForm.File["files"]
 
-		var ImagePaths []string
+        var imagePaths []string
 
-		// Loop through the files and upload them to Minio.
-		for _, fileHeader := range files {
-			// Open the file.
-			file, err := fileHeader.Open()
-			if err != nil {
-				fmt.Println(err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			defer file.Close()
+        // Loop through the files and upload them to S3.
+        for _, fileHeader := range files {
+            // Open the file.
+            file, err := fileHeader.Open()
+            if err != nil {
+                fmt.Println(err.Error())
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+            }
+            defer file.Close()
 
-			// Get the file name and extension.
-			filename := fileHeader.Filename
-			extension := filepath.Ext(filename)
+            // Get the file name and extension.
+            filename := fileHeader.Filename
+            extension := filepath.Ext(filename)
 
-			dotRemoved := extension[1:]
+            // Remove the dot from the extension.
+            dotRemoved := extension[1:]
 
-			// Generate a unique file name with the original extension.
-			newFilename := fmt.Sprintf("%d%s", time.Now().UnixNano(), extension)
-			newPath := "https://" + minioURL + "/jwc/" + newFilename
-			ImagePaths = append(ImagePaths, newPath)
+            // Generate a unique file name with the original extension.
+            newFilename := fmt.Sprintf("%d%s", time.Now().UnixNano(), extension)
+            newPath := "https://" + s3URL + "/" + bucketName + "/" + newFilename
+            imagePaths = append(imagePaths, newPath)
 
-			log.Println(ImagePaths)
+            log.Println(imagePaths)
 
-			// Upload the file to Minio.
-			_, err = minioClient.PutObject("jwc", newFilename, file, fileHeader.Size, minio.PutObjectOptions{
-				ContentType: "image/" + dotRemoved,
-			})
-			if err != nil {
-				fmt.Println(err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
+            // Upload the file to S3.
+            _, err = minioClient.PutObject(r.Context(), bucketName, newFilename, file, fileHeader.Size, minio.PutObjectOptions{
+                ContentType: "image/" + dotRemoved,
+            })
+            if err != nil {
+                fmt.Println(err.Error())
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+            }
+        }
 
-		data, err := json.Marshal(ImagePaths)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+        data, err := json.Marshal(imagePaths)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
 
-		// Set the Content-Type header to application/json
-		//w.Header().Set("Content-Type", "application/json")
-		// Write the JSON data to the response
+        // Set the Content-Type header to application/json
+        w.Header().Set("Content-Type", "application/json")
+        // Write the JSON data to the response
 
-		// Send a success response.
-		w.WriteHeader(http.StatusOK)
-		w.Write(data)
-	}
+        // Send a success response.
+        w.WriteHeader(http.StatusOK)
+        w.Write(data)
+    }
 }
 
 // addItem inserts a new item into the "items" collection in MongoDB

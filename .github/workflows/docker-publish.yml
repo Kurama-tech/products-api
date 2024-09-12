@@ -33,6 +33,6 @@ jobs:
           push: true
           tags: |
             ${{ secrets.DOCKER_USERNAME }}/jwc-api:main
-            ${{ secrets.DOCKER_USERNAME }}/products-api:${{ github.sha }}
+            ${{ secrets.DOCKER_USERNAME }}jwc-api:${{ github.sha }}
 #code
 

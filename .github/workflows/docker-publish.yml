@@ -32,7 +32,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/products-api:main
+            ${{ secrets.DOCKER_USERNAME }}/jwc-api:main
             ${{ secrets.DOCKER_USERNAME }}/products-api:${{ github.sha }}
 #code
 

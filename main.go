@@ -199,7 +199,7 @@ func main() {
 
 	router.HandleFunc("/items/enabled/{id}", enableItem(client)).Methods("GET")
 
-	router.HandleFunc("/upload", Upload(minioClient,"jwc", "s3.amazonaws.com")).Methods("POST")
+	router.HandleFunc("/upload", upload(minioClient,"jwc", "s3.amazonaws.com")).Methods("POST")
 
 	// Define a PUT route to edit an item in a collection
 	router.HandleFunc("/items/{id}", editItem(client)).Methods("PUT")
@@ -272,7 +272,7 @@ func login(jwtKey []byte, username string, password string) http.HandlerFunc {
 	}
 }
 
-func Upload(minioClient *minio.Client, bucketName, s3URL string) http.HandlerFunc {
+func upload(minioClient *minio.Client, bucketName, s3URL string) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         // Parse the multipart form.
         err := r.ParseMultipartForm(32 << 20)

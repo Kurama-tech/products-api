@@ -169,7 +169,7 @@ func main() {
 	// MongoDB client options
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"https://jwcindia.com", "https://backend.jwcindia.com"},                            // All origins
+		AllowedOrigins:   []string{"*"},                            // All origins
 		AllowedMethods:   []string{"POST", "GET", "PUT", "DELETE"}, // Allowing only get, just an example
 		AllowedHeaders:   []string{"Set-Cookie", "Content-Type"},
 		ExposedHeaders:   []string{"Set-Cookie"},

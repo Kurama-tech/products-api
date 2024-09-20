@@ -103,6 +103,12 @@ type Table struct {
 	TableData     []TableData `json:"tabledata"`
 }
 
+// HealthCheckResponse defines the structure of the health check response
+type HealthCheckResponse struct {
+    Status  string `json:"status"`
+    Message string `json:"message"`
+}
+
 const Database = "jwc"
 
 //const minioURL = "minio.mamun.cloud:9000"
@@ -276,6 +282,7 @@ func main() {
 	router.HandleFunc("/tables/{id}", deleteTable(client)).Methods("DELETE")
 
 	router.HandleFunc("/login", login(jwtKey, username, password)).Methods("POST")
+	router.HandleFunc("/health", healthHandler).Methods("GET")
 
 	// Start the HTTP server
 	log.Println("Starting HTTP server...")
@@ -284,6 +291,22 @@ func main() {
 
 		log.Fatal(err)
 	}
+}
+
+// healthHandler is the function that will run on /health
+func healthHandler(w http.ResponseWriter, r *http.Request) {
+    // Define the health check response
+    response := HealthCheckResponse{
+        Status:  "success",
+        Message: "Service is healthy",
+    }
+
+    // Set the content type to application/json
+    w.Header().Set("Content-Type", "application/json")
+
+    // Write the JSON response
+    w.WriteHeader(http.StatusOK)
+    json.NewEncoder(w).Encode(response)
 }
 
 func login(jwtKey []byte, username string, password string) http.HandlerFunc {

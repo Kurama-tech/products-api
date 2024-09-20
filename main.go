@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	//"strings"
+	"path"
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
@@ -22,6 +24,11 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3" 
+	 "github.com/aws/aws-sdk-go-v2/config"
+	 awsCredentials "github.com/aws/aws-sdk-go-v2/credentials" 
+	 "net/url"
 )
 
 type ItemGet struct {
@@ -99,6 +106,48 @@ type Table struct {
 const Database = "jwc"
 
 //const minioURL = "minio.mamun.cloud:9000"
+
+// isValidURL checks if a string is a valid URL
+func isValidURL(input string) bool {
+    u, err := url.Parse(input)
+    return err == nil && u.Scheme != "" && u.Host != ""
+}
+
+// generateSignedURL generates a signed URL for either a full URL or a path
+func generateSignedURL(s3Client *s3.Client, bucketName, input string) (string, error) {
+    // Check if the input is a valid URL
+    objectKey := input
+    if isValidURL(input) {
+        // If it's a URL, extract the object key (path or image name)
+        parsedURL, err := url.Parse(input)
+        if err != nil {
+            return "", err
+        }
+        //objectKey = strings.TrimLeft(parsedURL.Path, "/")
+		objectKey = path.Base(parsedURL.Path)
+		log.Println(objectKey)
+    }
+
+    // Create the GetObjectInput to request the object
+    s3Input := &s3.GetObjectInput{
+        Bucket: aws.String(bucketName),
+        Key:    aws.String(objectKey),
+    }
+
+    // Create the presigner from the S3 client
+    presigner := s3.NewPresignClient(s3Client)
+
+    // Presign the GetObject request with a 15-minute expiration
+    presignedReq, err := presigner.PresignGetObject(context.TODO(), s3Input, func(pso *s3.PresignOptions) {
+        pso.Expires = 15 * time.Minute
+    })
+    if err != nil {
+        return "", err
+    }
+
+    // Return the presigned URL
+    return presignedReq.URL, nil
+}
 
 func getEnv(Environment string) (string, error) {
 	variable := os.Getenv(Environment)
@@ -180,17 +229,30 @@ func main() {
 		log.Fatalln(err)
 	}
 
+	// Initialize AWS S3 client
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+	config.WithRegion("us-east-1"),
+	config.WithCredentialsProvider(
+		awsCredentials.NewStaticCredentialsProvider(minioKey, minioSecret, ""),
+	),)
+	if err != nil {
+		log.Fatalf("unable to load SDK config, %v", err)
+	}
+
+	// Create S3 client using the config
+	s3Client := s3.NewFromConfig(cfg)
+
 	// Create a new router using Gorilla Mux
 	router := mux.NewRouter()
 
 	// Define a POST route to add an item to a collection
 	router.HandleFunc("/items", addItem(client)).Methods("POST")
 
-	router.HandleFunc("/items", getItems(client)).Methods("GET")
+	router.HandleFunc("/items", getItems(client, s3Client, "jwc")).Methods("GET")
 
 	router.HandleFunc("/items/disabled", getDisabledItems(client)).Methods("GET")
 
-	router.HandleFunc("/items/{id}", getItem(client)).Methods("GET")
+	router.HandleFunc("/items/{id}", getItem(client, s3Client, "jwc")).Methods("GET")
 
 	// Define a DELETE route to delete an item from a collection
 	router.HandleFunc("/items/{id}", deleteItem(client)).Methods("DELETE")
@@ -199,13 +261,13 @@ func main() {
 
 	router.HandleFunc("/items/enabled/{id}", enableItem(client)).Methods("GET")
 
-	router.HandleFunc("/upload", upload(minioClient,"jwc", "s3.amazonaws.com")).Methods("POST")
+	router.HandleFunc("/upload", upload(minioClient,"jwc")).Methods("POST")
 
 	// Define a PUT route to edit an item in a collection
 	router.HandleFunc("/items/{id}", editItem(client)).Methods("PUT")
 
 	router.HandleFunc("/home", addHomeItem(client)).Methods("POST")
-	router.HandleFunc("/home", getHomeItems(client)).Methods("GET")
+	router.HandleFunc("/home", getHomeItems(client,s3Client, "jwc")).Methods("GET")
 	router.HandleFunc("/home/{id}", deleteHomeItem(client)).Methods("DELETE")
 
 	router.HandleFunc("/tables", addTable(client)).Methods("POST")
@@ -272,7 +334,7 @@ func login(jwtKey []byte, username string, password string) http.HandlerFunc {
 	}
 }
 
-func upload(minioClient *minio.Client, bucketName, s3URL string) http.HandlerFunc {
+func upload(minioClient *minio.Client, bucketName string) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         // Parse the multipart form.
         err := r.ParseMultipartForm(32 << 20)
@@ -285,7 +347,8 @@ func upload(minioClient *minio.Client, bucketName, s3URL string) http.HandlerFun
         // Get the file headers from the form.
         files := r.MultipartForm.File["files"]
 
-        var imagePaths []string
+        // Array to store the object keys
+        var objectKeys []string
 
         // Loop through the files and upload them to S3.
         for _, fileHeader := range files {
@@ -298,19 +361,14 @@ func upload(minioClient *minio.Client, bucketName, s3URL string) http.HandlerFun
             }
             defer file.Close()
 
-            // Get the file name and extension.
-            filename := fileHeader.Filename
-            extension := filepath.Ext(filename)
+            // Get the file extension.
+            extension := filepath.Ext(fileHeader.Filename)
 
             // Remove the dot from the extension.
             dotRemoved := extension[1:]
 
             // Generate a unique file name with the original extension.
             newFilename := fmt.Sprintf("%d%s", time.Now().UnixNano(), extension)
-            newPath := "https://" + s3URL + "/" + bucketName + "/" + newFilename
-            imagePaths = append(imagePaths, newPath)
-
-            log.Println(imagePaths)
 
             // Upload the file to S3.
             _, err = minioClient.PutObject(r.Context(), bucketName, newFilename, file, fileHeader.Size, minio.PutObjectOptions{
@@ -321,9 +379,13 @@ func upload(minioClient *minio.Client, bucketName, s3URL string) http.HandlerFun
                 http.Error(w, err.Error(), http.StatusInternalServerError)
                 return
             }
+
+            // Append the object key (newFilename) to the array
+            objectKeys = append(objectKeys, newFilename)
         }
 
-        data, err := json.Marshal(imagePaths)
+        // Marshal the array of object keys to JSON
+        data, err := json.Marshal(objectKeys)
         if err != nil {
             http.Error(w, err.Error(), http.StatusInternalServerError)
             return
@@ -331,9 +393,8 @@ func upload(minioClient *minio.Client, bucketName, s3URL string) http.HandlerFun
 
         // Set the Content-Type header to application/json
         w.Header().Set("Content-Type", "application/json")
-        // Write the JSON data to the response
 
-        // Send a success response.
+        // Write the JSON data to the response
         w.WriteHeader(http.StatusOK)
         w.Write(data)
     }
@@ -510,12 +571,11 @@ func enableItem(client *mongo.Client) http.HandlerFunc {
 	}
 }
 
-// getItems retrieves all items from the "items" collection in MongoDB
-func getItems(client *mongo.Client) http.HandlerFunc {
+func getItems(client *mongo.Client, s3Client *s3.Client , bucketName string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Get all items from the "items" collection in MongoDB
 		collection := client.Database(Database).Collection("products")
-		findOptions := options.Find().SetSort(bson.D{{Key: "name", Value: 1}}) 
+		findOptions := options.Find().SetSort(bson.D{{Key: "name", Value: 1}})
 		cursor, err := collection.Find(context.Background(), bson.M{}, findOptions)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -523,7 +583,7 @@ func getItems(client *mongo.Client) http.HandlerFunc {
 		}
 		defer cursor.Close(context.Background())
 
-		// Decode the cursor results into a slice of Item structs
+		// Decode the cursor results into a slice of ItemGet structs
 		var items []ItemGet
 		for cursor.Next(context.Background()) {
 			var item ItemGet
@@ -532,6 +592,17 @@ func getItems(client *mongo.Client) http.HandlerFunc {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+
+			// Generate signed URLs for images
+			for i, img := range item.Images {
+				signedURL, err := generateSignedURL(s3Client, bucketName, img)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				item.Images[i] = signedURL
+			}
+
 			items = append(items, item)
 		}
 
@@ -621,47 +692,47 @@ func getNavBar(client *mongo.Client) http.HandlerFunc {
 }
 
 // getItems retrieves all items from the "items" collection in MongoDB
-func getItem(client *mongo.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func getItem(client *mongo.Client, s3Client *s3.Client, bucketName string) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
 
-		vars := mux.Vars(r)
-		id := vars["id"]
+        // Get the item ID from the URL
+        vars := mux.Vars(r)
+        id := vars["id"]
 
-		fmt.Println(id)
-		// Get all items from the "items" collection in MongoDB
-		collection := client.Database(Database).Collection("products")
-		oid, err := primitive.ObjectIDFromHex(id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		cursor, err := collection.Find(context.Background(), bson.M{"_id": oid})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer cursor.Close(context.Background())
+        // Convert the string ID to a MongoDB ObjectID
+        oid, err := primitive.ObjectIDFromHex(id)
+        if err != nil {
+            http.Error(w, "Invalid ID", http.StatusBadRequest)
+            return
+        }
 
-		// Decode the cursor results into a slice of Item structs
-		var items []ItemGet
-		for cursor.Next(context.Background()) {
-			var item ItemGet
-			err := cursor.Decode(&item)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			items = append(items, item)
-		}
+        // Retrieve the item from the "products" collection
+        collection := client.Database(Database).Collection("products")
+        var item ItemGet
+        err = collection.FindOne(context.Background(), bson.M{"_id": oid}).Decode(&item)
+        if err != nil {
+            http.Error(w, "Item not found", http.StatusNotFound)
+            return
+        }
 
-		// Send the list of items as a JSON response
-		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(items)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
+        // Generate signed URLs for the images in the item
+        for i, image := range item.Images {
+            signedURL, err := generateSignedURL(s3Client, bucketName, image)
+            if err != nil {
+                http.Error(w, "Failed to generate signed URLs", http.StatusInternalServerError)
+                return
+            }
+            item.Images[i] = signedURL
+        }
+
+        // Return the item with signed URLs
+        w.Header().Set("Content-Type", "application/json")
+        err = json.NewEncoder(w).Encode(item)
+        if err != nil {
+            http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+            return
+        }
+    }
 }
 
 // addTable
@@ -703,38 +774,49 @@ func addTable(client *mongo.Client) http.HandlerFunc {
 }
 
 // getHome
-func getHomeItems(client *mongo.Client) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Parse the id parameter from the request URL
-		// Get all items from the "items" collection in MongoDB
-		collection := client.Database(Database).Collection("home")
-		cursor, err := collection.Find(context.Background(), bson.M{})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer cursor.Close(context.Background())
+// getHomeItems retrieves all items from the "home" collection in MongoDB and generates signed URLs for the images.
+func getHomeItems(client *mongo.Client, s3Client *s3.Client, bucketName string) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        // Get all items from the "home" collection in MongoDB
+        collection := client.Database(Database).Collection("home")
+        cursor, err := collection.Find(context.Background(), bson.M{})
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+        defer cursor.Close(context.Background())
 
-		// Decode the cursor results into a slice of Item structs
-		var items []HomeCarouselGet
-		for cursor.Next(context.Background()) {
-			var item HomeCarouselGet
-			err := cursor.Decode(&item)
+        // Decode the cursor results into a slice of HomeCarouselGet structs
+        var items []HomeCarouselGet
+        for cursor.Next(context.Background()) {
+            var item HomeCarouselGet
+            err := cursor.Decode(&item)
+            if err != nil {
+                http.Error(w, err.Error(), http.StatusInternalServerError)
+                return
+            }
+
+			// Generate signed URLs for the images
+			tempImg, err := generateSignedURL(s3Client, bucketName, item.URL)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				http.Error(w, "Failed to generate signed URLs", http.StatusInternalServerError)
 				return
+			} else {
+				item.URL = tempImg
 			}
-			items = append(items, item)
-		}
 
-		// Send the list of items as a JSON response
-		w.Header().Set("Content-Type", "application/json")
-		err = json.NewEncoder(w).Encode(items)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
+            
+            items = append(items, item)
+        }
+
+        // Send the list of items as a JSON response
+        w.Header().Set("Content-Type", "application/json")
+        err = json.NewEncoder(w).Encode(items)
+        if err != nil {
+            http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+            return
+        }
+    }
 }
 
 // getTable

@@ -167,7 +167,7 @@ func getEnv(Environment string) (string, error) {
 }
 func main() {
 	// MongoDB client options
-
+	port := "8002"
 	c := cors.New(cors.Options{
 		AllowedOrigins:   []string{"*"},                            // All origins
 		AllowedMethods:   []string{"POST", "GET", "PUT", "DELETE"}, // Allowing only get, just an example
@@ -205,7 +205,10 @@ func main() {
 	if err != nil {
 		os.Exit(1)
 	}
-
+	port = os.Getenv("PORT")
+	if port == "" {
+    		port = "8080" // fallback default for local dev
+	}
 	// minioURL, err := getEnv("MINIO_URL")
 	// if err != nil {
 	// 	os.Exit(1)
@@ -286,7 +289,7 @@ func main() {
 
 	// Start the HTTP server
 	log.Println("Starting HTTP server...")
-	err = http.ListenAndServe(":8002", c.Handler(router))
+	err = http.ListenAndServe(":"+ port, c.Handler(router))
 	if err != nil {
 
 		log.Fatal(err)
